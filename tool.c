@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
+#include <pthread.h>
 
 /*
 getting host ip or host addr from user
