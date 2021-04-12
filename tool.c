@@ -9,6 +9,9 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include<math.h>
+#include<fcntl.h>
+#include<errno.h>
+#include<sys/time.h>
 
 /*
 getting host ip or host addr from user
@@ -28,11 +31,11 @@ const int CHECK_RESERVED_PORTS=2;
 const int CHECK_SERVICES=3;
 
 struct connect_port_args{
-    int sock__id;
+    int sock_id;
     struct sockaddr_in *server_address;
     int port_range_start;
     int port_range_end;
-    int time_limit;
+    struct timeval *timeout;
 };
 
 int hname_to_ip(char *hname,char *ip,struct sockaddr_in *host){
@@ -56,31 +59,118 @@ int hname_to_ip(char *hname,char *ip,struct sockaddr_in *host){
     }
 }
 
+int connect_time_limit(int sockno,struct sockaddr *addr,int addrlen,struct timeval *timeout){
+
+    /*
+    returns 0 if connection was successful
+    returns 1 if timeout reached
+    returns -1 if an error occured
+    */
+
+    int res, opt;
+
+	// get socket flags
+	if ((opt = fcntl (sockno, F_GETFL, NULL)) < 0) {
+        fputs("get falgs error.\n",stderr);
+		return -1;
+	}
+
+	// set socket non-blocking
+	if (fcntl (sockno, F_SETFL, opt | O_NONBLOCK) < 0) {
+        fputs("set falgs error.\n",stderr);
+		return -1;
+	}
+
+	// try to connect
+	if ((res = connect (sockno, addr, addrlen)) < 0) {
+		if (errno == EINPROGRESS) {
+			fd_set wait_set;
+
+			// make file descriptor set with socket
+			FD_ZERO (&wait_set);
+			FD_SET (sockno, &wait_set);
+
+			// wait for socket to be writable; return after given timeout
+			res = select (sockno + 1, NULL, &wait_set, NULL, timeout);
+		}
+	}
+	// connection was successful immediately
+	else {
+		res = 1;
+	}
+
+	// reset socket flags
+	if (fcntl (sockno, F_SETFL, opt) < 0) {
+        fputs("reset falgs error.\n",stderr);
+		return -1;
+	}
+
+	// an error occured in connect or select
+	if (res < 0) {
+		return -1;
+	}
+	// select timed out
+	else if (res == 0) {
+		errno = ETIMEDOUT;
+		return 1;
+	}
+	// almost finished...
+	else {
+		socklen_t len = sizeof (opt);
+
+		// check for errors in socket layer
+		if (getsockopt (sockno, SOL_SOCKET, SO_ERROR, &opt, &len) < 0) {
+            fputs("socket layer checking error.\n",stderr);
+			return -1;
+		}
+
+		// there was an error
+		if (opt) {
+			errno = opt;
+            fputs("socket layer checking error.\n",stderr);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 void *connect_port(void *args){
     struct connect_port_args arguments=*(struct connect_port_args *)args;
-    int temp;
+    int rv;
 
     printf("%d-%d\n",arguments.port_range_start,arguments.port_range_end);
 
     int server_port=arguments.port_range_start;
-    for(server_port;server_port<=arguments.port_range_end;server_port++){   
+    for(server_port;server_port<arguments.port_range_end;server_port++){   
         arguments.server_address->sin_port=htons(server_port);
-        if((temp=connect(arguments.sock__id,(struct sockaddr *)arguments.server_address,sizeof(*arguments.server_address)))<0){
-            printf("port %d is close.\n",server_port);
-        }else{
+        rv=connect_time_limit(arguments.sock_id,
+        (struct sockaddr *)arguments.server_address,
+        sizeof(*arguments.server_address),
+        arguments.timeout);
+        if(rv==0){
             printf("port %d is active.\n",server_port);
+        }else if(rv==1){
+            printf("port %d is close. (timout reached)\n",server_port);
+        }else{
+            printf("port %d is close. (error connecting)\n",server_port);
         }
     }
 }
 
 
-void scan_ports(int sock_id,struct sockaddr_in *server_address,int action){
+void scan_ports(struct sockaddr_in *server_address,int action){
 
     int port_range_start,port_range_end;
     int temp=0;
-    int time_limit=0;
     int thread_no=0;
     int port_count=0;
+    struct timeval *timeout=malloc(sizeof(struct timeval));
+
+    if(timeout==NULL){
+        fputs("memmory allocation failed. (timeout)\n",stderr);
+        exit(EXIT_FAILURE);
+    }
 
     puts("port scaning range.");
     puts("start from:");
@@ -95,8 +185,22 @@ void scan_ports(int sock_id,struct sockaddr_in *server_address,int action){
     }
     puts("OK");
     port_count= port_range_end - port_range_start +1;
-    //printf("how long do you want to wait for each port: (s)\n");
-    // scanf("%d",&time_limit);
+
+    memset(timeout,0,sizeof(timeout));
+    
+    double time_in=0;
+    
+    printf("how long do you want to wait for each port: (s)\n");
+    scanf("%lf",&time_in);
+    
+    if(time_in<0 || time_in>600){
+        fputs("invalid or too large time limit.\n",stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    timeout->tv_sec=floor(time_in);
+    timeout->tv_usec=(double) (time_in-floor(time_in));
+
 
     fputs("How many threads you would like to create?\n",stdout);
     scanf("%d",&thread_no);
@@ -106,34 +210,31 @@ void scan_ports(int sock_id,struct sockaddr_in *server_address,int action){
         exit(EXIT_FAILURE);
     }
 
-    if(time_limit<0 || time_limit>600){
-        fputs("invalid or too large time limit.\n",stderr);
-        exit(EXIT_FAILURE);
-    }
 
-
-    // args->sock__id=sock_id;
-    // args->server_address=server_address;
-    // args->port_range_start=port_range_start;
-    // args->port_range_end=port_range_end;
-    // args->time_limit=time_limit;
     struct connect_port_args temp_arg[thread_no];
 
     pthread_t tid[thread_no];
     for(int i=0;i<thread_no;i++){
 
-        temp_arg[i].sock__id=sock_id;
+        // temp_arg[i].sock__id=sock_id;
+        temp_arg[i].sock_id=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+        if(temp_arg[i].sock_id<0){
+            perror("failed to create socket.");
+            i--;
+            continue;
+        }
         temp_arg[i].server_address=server_address;
-        temp_arg[i].time_limit=time_limit;
+        temp_arg[i].timeout=timeout;
         temp_arg[i].port_range_start=port_range_start +(i*(port_count/thread_no));
         temp_arg[i].port_range_end=port_range_start +((i+1)*(port_count/thread_no));
         if(i==thread_no-1){
-            temp_arg[i].port_range_end=port_range_end;
+            temp_arg[i].port_range_end=port_range_end+1;
         }
         pthread_create(&tid[i],NULL,(void *)connect_port,(void *)&temp_arg[i]);
     }
     for(int i=0;i<thread_no;i++){
         pthread_join(tid[i],NULL);
+        close(temp_arg[i].sock_id);
     }
 }
 
@@ -199,12 +300,12 @@ int main(int argc, char *argv[]){
         exit(EXIT_SUCCESS);
     }
     
-    int sock=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    // int sock=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
 
-    if(sock<0){
-        perror("failed to create socket.");
-        exit(EXIT_FAILURE);
-    }
+    // if(sock<0){
+    //     perror("failed to create socket.");
+    //     exit(EXIT_FAILURE);
+    // }
 
     server_address->sin_family=AF_INET;
     int pton_addr=inet_pton(AF_INET,host_ip_str,&server_address->sin_addr.s_addr);
@@ -219,9 +320,9 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     }
     
-    scan_ports(sock,server_address,action);
+    scan_ports(server_address,action);
 
-    close(sock);
+    // close(sock);
     return 0;
 }
 
