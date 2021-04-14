@@ -26,9 +26,12 @@ connection
 */
 const int MAX_IP_STR_LEN=16;
 const int MAX_THREAD_COUNT=10;
+const int MAX_ADDRESS_STR_LEN=30;
 const int CHECK_ALL_PORTS=1;
 const int CHECK_RESERVED_PORTS=2;
 const int CHECK_SERVICES=3;
+const int GET_PING=4;
+
 
 struct connect_port_args{
     int sock_id;
@@ -158,7 +161,6 @@ void *connect_port(void *args){
     }
 }
 
-
 void scan_ports(struct sockaddr_in *server_address,int action){
 
     int port_range_start,port_range_end;
@@ -238,7 +240,6 @@ void scan_ports(struct sockaddr_in *server_address,int action){
     }
 }
 
-
 int extract_action(int n,char *arg[]){
 
     if(n==2){
@@ -250,8 +251,57 @@ int extract_action(int n,char *arg[]){
         if(strcmp(arg[2],"-r")==0){
             return CHECK_RESERVED_PORTS;
         }
+        if(strcmp(arg[2],"-p")==0){
+            return GET_PING;
+        }
     }else{
         return 0;
+    }
+}
+
+void ping(char input[]){
+    int i=0;
+    int counter=0;
+    while(input[i]!='\0'){
+        if(input[i]==' '){
+            i++;
+            continue;
+        }
+        for(i;;i++){
+            if(input[i]==' '|| input[i]=='\0'){
+                break;
+            }
+        }
+        counter++;
+    }
+    printf("%d web addresses found.\n",counter);
+
+    char addr[counter][MAX_ADDRESS_STR_LEN];
+
+    i=0;
+    int j=0;
+    while(input[i]!='\0'){
+        if(input[i]==' '){
+            i++;
+            continue;
+        }
+        int k=0;
+        for(i;;i++){
+            if(input[i]==' '|| input[i]=='\0'){
+                addr[j][k]='\0';    
+                break;
+            }
+            addr[j][k]=input[i];
+            k++;
+            if(k>=MAX_ADDRESS_STR_LEN){
+                fputs("too large address.\n",stderr);
+                exit(EXIT_FAILURE);
+            }
+        }
+        j++;
+    }
+    for(int h=0;h<counter;h++){
+        printf("%s\n",addr[h]);
     }
 }
 
@@ -287,6 +337,12 @@ int main(int argc, char *argv[]){
     memset(host_ip_str,'\0',MAX_IP_STR_LEN);
     memset(server_address,0,sizeof(*server_address));
     user_in=argv[1];
+
+    if(action==GET_PING){
+        fputs("ping processing...\n",stdout);
+        ping(user_in);
+        exit(EXIT_SUCCESS);
+    }
 
     if((rv=hname_to_ip(user_in,host_ip_str,server_address))!=0){
         fprintf(stderr, "host name resolving failed\n more info: %s\n", gai_strerror(rv));
@@ -325,15 +381,3 @@ int main(int argc, char *argv[]){
     // close(sock);
     return 0;
 }
-
-
-// // Set non-blocking 
-    // if( (arg = fcntl(soc, F_GETFL, NULL)) < 0) { 
-    //     fprintf(stderr, "Error fcntl(..., F_GETFL) (%s)\n", strerror(errno)); 
-    //     exit(0); 
-    // } 
-    // arg |= O_NONBLOCK; 
-    // if( fcntl(soc, F_SETFL, arg) < 0) { 
-    //     fprintf(stderr, "Error fcntl(..., F_SETFL) (%s)\n", strerror(errno)); 
-    //     exit(0); 
-    // } 
