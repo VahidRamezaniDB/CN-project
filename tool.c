@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <math.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <errno.h>
 #include <sys/time.h>
 
@@ -25,6 +26,7 @@ make and configure sockets
 
 connection
 */
+#define PING_PKT_S 64
 const int MAX_IP_STR_LEN=16;
 const int MAX_THREAD_COUNT=10;
 const int MAX_ADDRESS_STR_LEN=30;
@@ -32,7 +34,10 @@ const int CHECK_ALL_PORTS=1;
 const int CHECK_RESERVED_PORTS=2;
 const int CHECK_SERVICES=3;
 const int GET_PING=4;
-
+int pingloop=1;
+// const int PING_PKT_S=64;
+int PING_SLEEP_RATE=1000000;
+int RECV_TIMEOUT=1;
 
 struct connect_port_args{
     int sock_id;
@@ -41,6 +46,15 @@ struct connect_port_args{
     int port_range_end;
     struct timeval *timeout;
 };
+
+struct ping_pkt{
+    struct icmphdr hdr;
+    char msg[PING_PKT_S-sizeof(struct icmphdr)];
+};
+
+void interrupt_handler(int dummy){
+    pingloop=0;
+}
 
 int hname_to_ip(char *hname,char *ip,struct sockaddr_in *host){
     
@@ -260,13 +274,115 @@ int extract_action(int n,char *arg[]){
     }
 }
 
-void ping_driver(char *host_address_str){
-    
-    int sockfd;
+unsigned short checksum(void *pckt, int len){
+    unsigned short *buffer = pckt;
+    unsigned int sum=0;
+    unsigned short result;
+  
+    for ( sum = 0; len > 1; len -= 2 ){
+        sum += *buffer++;
+    }
+    if ( len == 1 ){
+        sum += *(unsigned char*)buffer;
+    }
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    result = ~sum;
+    return result;
+}
+
+void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, char *host_name){
+
+    int ttl_val=64, msg_count=0, i, addr_len, flag=1,msg_received_count=0;
+      
+    struct ping_pkt pckt;
+    struct sockaddr_in r_addr;
+    struct timespec time_start, time_end, tfs, tfe;
+    long double rtt_msec=0, total_msec=0;
+    struct timeval tv_out;
+    tv_out.tv_sec = RECV_TIMEOUT;
+    tv_out.tv_usec = 0;
+  
+    clock_gettime(CLOCK_MONOTONIC, &tfs);
+  
+      
+
+    if (setsockopt(ping_sockfd, SOL_IP, IP_TTL,&ttl_val, sizeof(ttl_val)) != 0){
+        printf("\nSetting socket options to TTL failed!\n");
+        perror("ttl setting.\n");
+        return;
+    }
+    else{
+        printf("\nSocket set to TTL..\n");
+    }
+  
+    setsockopt(ping_sockfd, SOL_SOCKET, SO_RCVTIMEO,(const char*)&tv_out, sizeof tv_out);
+  
+    while(pingloop){
+        flag=1;
+       
+        bzero(&pckt, sizeof(pckt));
+          
+        pckt.hdr.type = ICMP_ECHO;
+        pckt.hdr.un.echo.id = getpid();
+          
+        for ( i = 0; i < sizeof(pckt.msg)-1; i++ ){
+            pckt.msg[i] = i+'0';
+        }
+        pckt.msg[i] = 0;
+        pckt.hdr.un.echo.sequence = msg_count++;
+        pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
+  
+  
+        usleep(PING_SLEEP_RATE);
+  
+        clock_gettime(CLOCK_MONOTONIC, &time_start);
+        if ( sendto(ping_sockfd, &pckt, sizeof(pckt), 0, 
+           (struct sockaddr*) ping_addr, 
+            sizeof(*ping_addr)) <= 0){
+            printf("\nPacket Sending Failed!\n");
+            flag=0;
+        }
+  
+        addr_len=sizeof(r_addr);
+  
+        if ( recvfrom(ping_sockfd, &pckt, sizeof(pckt), 0, 
+             (struct sockaddr*)&r_addr, &addr_len) <= 0 && msg_count>1){
+            printf("\nPacket receive failed!\n");
+        }
+        else{
+            clock_gettime(CLOCK_MONOTONIC, &time_end);
+              
+            double time_elapsed = ((double)(time_end.tv_nsec - time_start.tv_nsec))/1000000.0;
+            rtt_msec = (time_end.tv_sec-time_start.tv_sec)*1000.0 + time_elapsed;
+
+            if(flag){
+                if(!(pckt.hdr.type ==69 && pckt.hdr.code==0)){
+                    printf("Error..Packet received with ICMP type %d code %d\n", pckt.hdr.type, pckt.hdr.code);
+                }
+                else{
+                    printf("\n%d bytes from %s (%s) msg_seq=%d ttl=%d rtt = %Lf ms.\n",
+                     PING_PKT_S, host_name, ping_ip, msg_count,ttl_val, rtt_msec);
+                    msg_received_count++;
+                }
+            }
+        }    
+    }
+    clock_gettime(CLOCK_MONOTONIC, &tfe);
+    double time_elapsed = ((double)(tfe.tv_nsec - tfs.tv_nsec))/1000000.0;
+      
+    total_msec = (tfe.tv_sec-tfs.tv_sec)*1000.0+ time_elapsed;
+                     
+    printf("\n===%s (%s) ping statistics===\n", ping_ip,host_name);
+    printf("\n%d packets sent, %d packets received, %f percent packet loss. Total time: %Lf ms.\n\n",
+    msg_count, msg_received_count,((msg_count - msg_received_count)/msg_count) * 100.0,total_msec); 
+}
+
+void* ping_driver(void *h_address_str){
+    char *host_address_str=(char *) h_address_str;
+    int sock;
     char *ip_addr=malloc(sizeof(char)*MAX_IP_STR_LEN);
     struct sockaddr_in *server_address=malloc(sizeof(struct sockaddr_in));
-    int addrlen = sizeof(server_address);
-    char net_buf[NI_MAXHOST];
 
     int rv;
     if((rv=hname_to_ip(host_address_str,ip_addr,server_address))!=0){
@@ -275,6 +391,18 @@ void ping_driver(char *host_address_str){
     }
     printf("trying to connect to '%s'\nIP: '%s'\n",host_address_str,ip_addr);
 
+    sock= socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if(sock<0){
+        printf("Socket file descriptor not received!!\n");
+        perror("socket creation.");
+        exit(EXIT_FAILURE);
+    }
+    printf("Socket file descriptor %d received\n", sock);
+
+    signal(SIGINT,interrupt_handler);
+ 
+    send_ping(sock, server_address,ip_addr,host_address_str);
+      
 }
 
 void ping(char input[]){
@@ -322,9 +450,13 @@ void ping(char input[]){
         printf("%s\n",addr[h]);
     }
 
+    pthread_t tid[counter];
     for(int h=0;h<counter;h++){
-        ping_driver(addr[h]);
-    }  
+        pthread_create(&tid[h],NULL,(void *)ping_driver,(void *)&addr[h]);
+    }
+    for(int h=0;h<counter;h++){
+        pthread_join(tid[h],NULL);
+    }
 }
 
 int main(int argc, char *argv[]){
