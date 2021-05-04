@@ -4,14 +4,15 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <netinet/ip_icmp.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <pthread.h>
-#include<math.h>
-#include<fcntl.h>
-#include<errno.h>
-#include<sys/time.h>
+#include <math.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/time.h>
 
 /*
 getting host ip or host addr from user
@@ -259,7 +260,25 @@ int extract_action(int n,char *arg[]){
     }
 }
 
+void ping_driver(char *host_address_str){
+    
+    int sockfd;
+    char *ip_addr=malloc(sizeof(char)*MAX_IP_STR_LEN);
+    struct sockaddr_in *server_address=malloc(sizeof(struct sockaddr_in));
+    int addrlen = sizeof(server_address);
+    char net_buf[NI_MAXHOST];
+
+    int rv;
+    if((rv=hname_to_ip(host_address_str,ip_addr,server_address))!=0){
+        fprintf(stderr, "host name resolving failed\n more info: %s\n", gai_strerror(rv));
+        exit(EXIT_FAILURE);
+    }
+    printf("trying to connect to '%s'\nIP: '%s'\n",host_address_str,ip_addr);
+
+}
+
 void ping(char input[]){
+
     int i=0;
     int counter=0;
     while(input[i]!='\0'){
@@ -277,7 +296,6 @@ void ping(char input[]){
     printf("%d web addresses found.\n",counter);
 
     char addr[counter][MAX_ADDRESS_STR_LEN];
-
     i=0;
     int j=0;
     while(input[i]!='\0'){
@@ -303,6 +321,10 @@ void ping(char input[]){
     for(int h=0;h<counter;h++){
         printf("%s\n",addr[h]);
     }
+
+    for(int h=0;h<counter;h++){
+        ping_driver(addr[h]);
+    }  
 }
 
 int main(int argc, char *argv[]){
@@ -356,13 +378,6 @@ int main(int argc, char *argv[]){
         exit(EXIT_SUCCESS);
     }
     
-    // int sock=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
-
-    // if(sock<0){
-    //     perror("failed to create socket.");
-    //     exit(EXIT_FAILURE);
-    // }
-
     server_address->sin_family=AF_INET;
     int pton_addr=inet_pton(AF_INET,host_ip_str,&server_address->sin_addr.s_addr);
 
@@ -378,6 +393,5 @@ int main(int argc, char *argv[]){
     
     scan_ports(server_address,action);
 
-    // close(sock);
     return 0;
 }
