@@ -26,7 +26,6 @@ make and configure sockets
 
 connection
 */
-#define PING_PKT_S 64
 const int MAX_IP_STR_LEN=16;
 const int MAX_THREAD_COUNT=10;
 const int MAX_ADDRESS_STR_LEN=30;
@@ -35,9 +34,9 @@ const int CHECK_RESERVED_PORTS=2;
 const int CHECK_SERVICES=3;
 const int GET_PING=4;
 int pingloop=1;
-// const int PING_PKT_S=64;
 int PING_SLEEP_RATE=1000000;
-int RECV_TIMEOUT=1;
+int recv_timeout=1;
+int ping_pkt_size=64;
 
 struct connect_port_args{
     int sock_id;
@@ -47,10 +46,7 @@ struct connect_port_args{
     struct timeval *timeout;
 };
 
-struct ping_pkt{
-    struct icmphdr hdr;
-    char msg[PING_PKT_S-sizeof(struct icmphdr)];
-};
+
 
 void interrupt_handler(int dummy){
     pingloop=0;
@@ -295,12 +291,14 @@ void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, cha
 
     int ttl_val=64, msg_count=0, i, addr_len, flag=1,msg_received_count=0;
       
-    struct ping_pkt pckt;
+    struct icmphdr header;
+    unsigned char *packet=malloc((ping_pkt_size)*sizeof(unsigned char));
+    char *msg=malloc((ping_pkt_size-sizeof(struct icmphdr))*sizeof(char));
     struct sockaddr_in r_addr;
     struct timespec time_start, time_end, tfs, tfe;
     long double rtt_msec=0, total_msec=0;
     struct timeval tv_out;
-    tv_out.tv_sec = RECV_TIMEOUT;
+    tv_out.tv_sec = recv_timeout;
     tv_out.tv_usec = 0;
   
     clock_gettime(CLOCK_MONOTONIC, &tfs);
@@ -321,23 +319,32 @@ void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, cha
     while(pingloop){
         flag=1;
        
-        bzero(&pckt, sizeof(pckt));
-          
-        pckt.hdr.type = ICMP_ECHO;
-        pckt.hdr.un.echo.id = getpid();
-          
-        for ( i = 0; i < sizeof(pckt.msg)-1; i++ ){
-            pckt.msg[i] = i+'0';
+        memset(&header,0,sizeof(header));
+        memset(msg,0,sizeof(msg));
+        memset(packet,0,ping_pkt_size);
+
+
+        for ( i = 0; i < sizeof(msg)-1; i++ ){
+            msg[i] = i+'0';
         }
-        pckt.msg[i] = 0;
-        pckt.hdr.un.echo.sequence = msg_count++;
-        pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
-  
-  
+        msg[i]='\0';
+        header.type=ICMP_ECHO;
+        header.un.echo.id=getpid();
+        header.un.echo.sequence=msg_count++;
+        int j=0,k;
+        for(;j<sizeof(header);j++){
+            packet[j]=(((unsigned char *)&header)[j]);
+        }
+        k=j;
+        for(;k<ping_pkt_size;k++){
+            packet[k]=(unsigned char)msg[k];
+        }
+        header.checksum=checksum(packet,ping_pkt_size);
+
         usleep(PING_SLEEP_RATE);
   
         clock_gettime(CLOCK_MONOTONIC, &time_start);
-        if ( sendto(ping_sockfd, &pckt, sizeof(pckt), 0, 
+        if ( sendto(ping_sockfd, packet, ping_pkt_size, 0, 
            (struct sockaddr*) ping_addr, 
             sizeof(*ping_addr)) <= 0){
             printf("\nPacket Sending Failed!\n");
@@ -346,7 +353,7 @@ void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, cha
   
         addr_len=sizeof(r_addr);
   
-        if ( recvfrom(ping_sockfd, &pckt, sizeof(pckt), 0, 
+        if ( recvfrom(ping_sockfd, packet, ping_pkt_size, 0, 
              (struct sockaddr*)&r_addr, &addr_len) <= 0 && msg_count>1){
             printf("\nPacket receive failed!\n");
         }
@@ -356,13 +363,20 @@ void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, cha
             double time_elapsed = ((double)(time_end.tv_nsec - time_start.tv_nsec))/1000000.0;
             rtt_msec = (time_end.tv_sec-time_start.tv_sec)*1000.0 + time_elapsed;
 
+            j=0;
+            unsigned char *p=(unsigned char *)&header;
+            for(;j<sizeof(header);j++){
+                *p=packet[j];
+                p=p+1;
+            }
+
             if(flag){
-                if(!(pckt.hdr.type ==69 && pckt.hdr.code==0)){
-                    printf("Error..Packet received with ICMP type %d code %d\n", pckt.hdr.type, pckt.hdr.code);
+                if(!(header.type ==69 && header.code==0)){
+                    printf("Error..Packet received with ICMP type %d code %d\n", header.type, header.code);
                 }
                 else{
                     printf("\n%d bytes from %s (%s) msg_seq=%d ttl=%d rtt = %Lf ms.\n",
-                     PING_PKT_S, host_name, ping_ip, msg_count,ttl_val, rtt_msec);
+                     ping_pkt_size, host_name, ping_ip, msg_count,ttl_val, rtt_msec);
                     msg_received_count++;
                 }
             }
@@ -449,6 +463,12 @@ void ping(char input[]){
     for(int h=0;h<counter;h++){
         printf("%s\n",addr[h]);
     }
+
+    printf("Enter the maximum time to wait for recieving each packet.\n");
+    scanf("%d",&recv_timeout);
+
+    printf("Enter the packet size you desire.\n");
+    scanf("%d",&ping_pkt_size);
 
     pthread_t tid[counter];
     for(int h=0;h<counter;h++){
