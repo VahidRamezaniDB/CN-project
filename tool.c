@@ -33,8 +33,8 @@ const int CHECK_ALL_PORTS=1;
 const int CHECK_RESERVED_PORTS=2;
 const int CHECK_SERVICES=3;
 const int GET_PING=4;
+const int PING_SLEEP_RATE=1000000;
 int pingloop=1;
-int PING_SLEEP_RATE=1000000;
 int recv_timeout=1;
 int ping_pkt_size=64;
 
@@ -337,7 +337,7 @@ void send_ping(int ping_sockfd, struct sockaddr_in *ping_addr,char *ping_ip, cha
         }
         k=j;
         for(;k<ping_pkt_size;k++){
-            packet[k]=(unsigned char)msg[k];
+            packet[k]=(unsigned char)msg[k-j];
         }
         header.checksum=checksum(packet,ping_pkt_size);
 
@@ -467,8 +467,12 @@ void ping(char input[]){
     printf("Enter the maximum time to wait for recieving each packet.\n");
     scanf("%d",&recv_timeout);
 
-    printf("Enter the packet size you desire.\n");
+    printf("Enter the packet size you desire.\nThe size must be at least 16.");
     scanf("%d",&ping_pkt_size);
+    if(ping_pkt_size<16){
+        fputs("Wrong input.\n",stderr);
+        exit(EXIT_FAILURE);
+    }
 
     pthread_t tid[counter];
     for(int h=0;h<counter;h++){
