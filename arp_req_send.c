@@ -125,7 +125,7 @@ main (int argc, char **argv)
   strcpy (src_ip, "10.0.2.15");
   
   // Destination URL or IPv4 address (must be a link-local node): you need to fill this out
-  strcpy (target, "10.0.2.85");
+  strcpy (target, argv[1]);
   
   // Fill out hints for getaddrinfo().
   memset (&hints, 0, sizeof (struct addrinfo));
