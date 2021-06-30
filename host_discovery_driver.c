@@ -33,7 +33,7 @@ void main(int argc, char *argv[]){
     char opt;
     char* hostmin,*hostmax;
     struct my_ip min_ip,max_ip;
-    char* timeout;
+    char* timeout=0;
 
     if(argc<3 || argc>5){
         printf("Not valid command.\n use  <exec name> <option> <arg...> <int timeout sec>\n<options>:\n-p receive hostmin and hostmax as args\n-c receive CIDR notation.\n");
@@ -42,16 +42,17 @@ void main(int argc, char *argv[]){
     system("gcc arp_req_send.c -o send");
     system("gcc arp_reply_recv.c -o recv");
 
-    if(argv[1]=="-p"){
+    if(argv[1][1]=='p'){
         hostmin=argv[2];
         hostmax=argv[3];
         timeout=argv[4];
 
+        printf("HMIN: %s\nHMAX: %s\n",hostmin,hostmax);
         int j=0;
         char* temp=malloc(3*sizeof(char));
         memset(temp,0,sizeof(temp));
         for(int i=0;hostmin[i];i++){
-            if(hostmin[i]=='.'){
+            if(hostmin[i]=='.'||hostmin[i]==' '){
                 // strncat(temp,"\0",1);
                 min_ip.parts[j]=atoi(temp);
                 memset(temp,0,sizeof(temp));
@@ -60,11 +61,13 @@ void main(int argc, char *argv[]){
             }
             strncat(temp,&hostmin[i],1);
         }
-        
+        min_ip.parts[j]=atoi(temp);
+        memset(temp,0,sizeof(temp));                
+
         j=0;
         memset(temp,0,sizeof(temp));
         for(int i=0;hostmax[i];i++){
-            if(hostmax[i]=='.'){
+            if(hostmax[i]=='.'||hostmax[i]==' '){
                 // strncat(temp,"\0",1);
                 max_ip.parts[j]=atoi(temp);
                 memset(temp,0,sizeof(temp));
@@ -73,6 +76,8 @@ void main(int argc, char *argv[]){
             }
             strncat(temp,&hostmax[i],1);
         }
+        max_ip.parts[j]=atoi(temp);
+        memset(temp,0,sizeof(temp));
 
         for(int i=0;i<4;i++){
             if(min_ip.parts[i]>max_ip.parts[i]){
@@ -80,7 +85,7 @@ void main(int argc, char *argv[]){
                 exit(EXIT_FAILURE);
             }
         }
-    }else if(argv[1]=="-c"){
+    }else if(argv[1][1]=='c'){
         // char* cidr_form=malloc(MAX_IP_CIDR_LEN*sizeof(char));
         // cidr_form=argv[3];
         printf("not yet developed.\n");
@@ -98,28 +103,38 @@ void main(int argc, char *argv[]){
             char temp[3];
             sprintf(temp,"%d",min_ip.parts[i]);
             strcat(ip_str,temp);
+            if(i==3){
+                break;
+            }
+            strcat(ip_str,".");
         }
         
-        /*sending arp req*/
-        char* send_command=malloc(sizeof(char)*(MAX_SEND_COM_LEN+MAX_IP_ADDR_LEN-1));
-        
-        strcat(send_command,"sudo ./send ");
-        strcat(send_command, ip_str);
-        strcat(send_command," &");
-
-        system(send_command);
-
-        /*waiting for arp rep*/
+        /*listening for arp rep*/
+        // printf("ARP REQ SENT. WAITING FOR RESPONSE.\n");
         
         char* recv_command=malloc(sizeof(char)*MAX_RECV_COM_LEN);
 
         strcat(recv_command,"sudo timeout ");
         strcat(recv_command,timeout);
-        strcat(recv_command," ./recv");
+        strcat(recv_command," ./recv &");
 
+        sleep(atoi(timeout));
         system(recv_command);
 
-        for(int i=3;i<0;i--){
+        if(is_equal_my_ip_struct(min_ip,max_ip)){
+            break;
+        } 
+        /*sending arp req*/
+        printf("\nsending arp req to %s\n\n",ip_str);
+        char* send_command=malloc(sizeof(char)*(MAX_SEND_COM_LEN+MAX_IP_ADDR_LEN-1));
+        
+        strcat(send_command,"sudo ./send ");
+        strcat(send_command, ip_str);
+
+        system(send_command);
+        
+
+        for(int i=3;i>-1;i--){
             if(min_ip.parts[i]!=255){
                 min_ip.parts[i]++;
                 break;
@@ -127,9 +142,7 @@ void main(int argc, char *argv[]){
             min_ip.parts[i]=0;
         }
 
-        if(is_equal_my_ip_struct(min_ip,max_ip)){
-            break;
-        }        
+               
     }
 
 }
