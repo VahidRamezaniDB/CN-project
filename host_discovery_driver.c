@@ -58,7 +58,7 @@ void main(int argc, char *argv[]){
                 j++;
                 continue;
             }
-            strncat(temp,hostmin[i],1);
+            strncat(temp,&hostmin[i],1);
         }
         
         j=0;
@@ -71,7 +71,7 @@ void main(int argc, char *argv[]){
                 j++;
                 continue;
             }
-            strncat(temp,hostmax[i],1);
+            strncat(temp,&hostmax[i],1);
         }
 
         for(int i=0;i<4;i++){
