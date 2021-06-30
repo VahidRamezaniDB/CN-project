@@ -39,6 +39,8 @@ void main(int argc, char *argv[]){
         printf("Not valid command.\n use  <exec name> <option> <arg...> <int timeout sec>\n<options>:\n-p receive hostmin and hostmax as args\n-c receive CIDR notation.\n");
         exit(EXIT_FAILURE);        
     }
+    system("gcc arp_req_send.c -o send");
+    system("gcc arp_reply_recv.c -o recv");
 
     if(argv[1]=="-p"){
         hostmin=argv[2];
